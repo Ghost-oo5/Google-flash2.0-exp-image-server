@@ -1,7 +1,7 @@
 import os
 import io
 import base64
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from PIL import Image
@@ -22,9 +22,20 @@ MODEL_ID = "gemini-2.0-flash-exp"
 
 app = FastAPI()
 
-# Pydantic model for generating content
+# Helper function to format base64 image with prefix
+def format_base64_image(b64_string: str) -> str:
+    return f"data:image/jpeg;base64,{b64_string}"
+
+# Pydantic models defined in the same file
 class GenerateRequest(BaseModel):
     contents: str
+
+class EditRequest(BaseModel):
+    prompt: str
+    image_base64: str
+
+class ChatRequest(BaseModel):
+    message: str
 
 @app.post("/generate")
 async def generate_content(request: GenerateRequest):
@@ -46,48 +57,50 @@ async def generate_content(request: GenerateRequest):
             if part.text is not None and result_text is None:
                 result_text = part.text
             elif part.inline_data is not None and image_base64 is None:
-                image_base64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                image_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                image_base64 = format_base64_image(image_b64)
         return {"text": result_text, "image_base64": image_base64}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Pydantic model for editing images
-class EditRequest(BaseModel):
-    prompt: str
-
 @app.post("/edit")
-async def edit_image(prompt: str = Form(...), file: UploadFile = File(...)):
+async def edit_image(request: EditRequest):
     """
-    Edits an uploaded image based on the provided prompt.
-    Returns the edited image as a base64-encoded string and any text response.
+    Edits an image based on the provided prompt and base64-encoded image data.
+    Returns the edited image as a base64-encoded string along with any text response.
     """
     try:
-        contents = await file.read()
-        image = Image.open(io.BytesIO(contents))
+        image_str = request.image_base64
+        # Remove the data URL prefix if present
+        if image_str.startswith("data:image"):
+            image_str = image_str.split(",", 1)[1]
+        
+        # Decode the base64 image data
+        image_data = base64.b64decode(image_str)
+        image = Image.open(io.BytesIO(image_data))
+
         response = client.models.generate_content(
             model=MODEL_ID,
             contents=[
-                prompt,
+                request.prompt,
                 image
             ],
             config=types.GenerateContentConfig(
                 response_modalities=['Text', 'Image']
             )
         )
+
         result_text = None
         image_base64 = None
         for part in response.candidates[0].content.parts:
             if part.text is not None and result_text is None:
                 result_text = part.text
             elif part.inline_data is not None and image_base64 is None:
-                image_base64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                image_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                image_base64 = format_base64_image(image_b64)
         return {"text": result_text, "image_base64": image_base64}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# Pydantic model for chat messages
-class ChatRequest(BaseModel):
-    message: str
 
 @app.post("/chat")
 async def chat_message(request: ChatRequest):
@@ -109,7 +122,8 @@ async def chat_message(request: ChatRequest):
             if part.text is not None and result_text is None:
                 result_text = part.text
             elif part.inline_data is not None and image_base64 is None:
-                image_base64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                image_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                image_base64 = format_base64_image(image_b64)
         return {"text": result_text, "image_base64": image_base64}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
